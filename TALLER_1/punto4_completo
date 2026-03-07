@@ -1,0 +1,176 @@
+# archivo: comparar_alternativas_oee.py
+import matplotlib.pyplot as plt
+
+# -----------------------
+# DATOS BASE (Alternativa I: tiempos originales)
+# -----------------------
+stations_base = [
+    {"id": 1, "tarea": "box assembly",             "operador": "hombre",  "tiempo": 35, "n_operadores": 1},
+    {"id": 2, "tarea": "insert engine in the box", "operador": "hombre",  "tiempo": 60, "n_operadores": 1},
+    {"id": 3, "tarea": "insert electronic card",   "operador": "hombre",  "tiempo": 50, "n_operadores": 1},
+    {"id": 4, "tarea": "welding",                  "operador": "maquina", "tiempo": 20, "n_operadores": 1},
+    {"id": 5, "tarea": "place lids",               "operador": "hombre",  "tiempo": 70, "n_operadores": 1},
+    {"id": 6, "tarea": "performance test",         "operador": "maquina", "tiempo": 30, "n_operadores": 1},
+    {"id": 7, "tarea": "packing",                  "operador": "hombre",  "tiempo": 25, "n_operadores": 1},
+]
+
+# -----------------------
+# CONFIGURA AQUÍ: alternativa 2 (ejemplo: estaciones 2,3,5 con 2 operarios cada una)
+# Si quieres probar otra configuración, cambia los valores de operarios_alt2.
+# -----------------------
+operarios_alt2 = {1:1, 2:2, 3:2, 4:1, 5:2, 6:1, 7:1}
+
+# -----------------------
+# FUNCIÓN QUE CALCULA MÉTRICAS
+# -----------------------
+def compute_metrics(stations, wage_per_hour=5000):
+    # copia para no mutar entrada
+    st = [s.copy() for s in stations]
+    # ajustar n_operadores si no existe
+    for s in st:
+        s.setdefault("n_operadores", 1)
+
+    # tiempos ajustados (si hay 2 personas en una estación, asumimos trabajo en paralelo => tiempo/n)
+    for s in st:
+        n = s["n_operadores"]
+        if n < 1:
+            raise ValueError("n_operadores debe ser >= 1")
+        s["tiempo_ajustado"] = s["tiempo"] / n
+
+    # métricas principales
+    T0 = sum(s["tiempo_ajustado"] for s in st)                   # tiempo total del sistema (s/unidad)
+    CT = max(s["tiempo_ajustado"] for s in st)                   # tiempo de ciclo (s/unidad)
+    TH = 3600.0 / CT                                            # unidades / hora
+    bottlenecks = [s for s in st if abs(s["tiempo_ajustado"] - CT) < 1e-9]
+
+    total_workers = sum(s["n_operadores"] for s in st if s["operador"] == "hombre")
+    total_machines = sum(s["n_operadores"] for s in st if s["operador"] == "maquina")
+
+    # segundos-humanos agregados por unidad (suma de tiempos originales de estaciones 'hombre')
+    segundos_humanos_por_unidad = sum(s["tiempo"] for s in st if s["operador"] == "hombre")
+    segundos_maquina_por_unidad = sum(s["tiempo"] for s in st if s["operador"] == "maquina")
+
+    # PRODUCTIVIDADES (aquí la que pides como RESPUESTA principal = PROMEDIO)
+    prod_promedio_por_trabajador = TH / total_workers if total_workers > 0 else float("nan")
+    prod_promedio_por_maquina = TH / total_machines if total_machines > 0 else float("nan")
+
+    # productividades alternativas para contexto
+    prod_por_hora_hombre_agregada = 3600.0 / segundos_humanos_por_unidad if segundos_humanos_por_unidad > 0 else float("nan")
+    prod_por_hora_maquina_agregada = 3600.0 / segundos_maquina_por_unidad if segundos_maquina_por_unidad > 0 else float("nan")
+
+    # eficiencia
+    N = len(st)
+    eficiencia = (T0 / (N * CT)) * 100
+
+    # COSTOS de mano de obra por producto:
+    # - directo (tiempo humano realmente empleado por unidad * salario)
+    horas_hombre_por_unidad = segundos_humanos_por_unidad / 3600.0
+    costo_labor_directo_por_unidad = wage_per_hour * horas_hombre_por_unidad
+
+    # - pagado (si pagas a todos los trabajadores por hora, costo por unidad = (total_workers*wage)/TH)
+    costo_labor_pagado_por_unidad = (total_workers * wage_per_hour) / TH if TH > 0 else float("nan")
+
+    # empaquetar resultado
+    metrics = {
+        "stations": st,
+        "T0_s": T0,
+        "CT_s": CT,
+        "TH_u_per_h": TH,
+        "bottlenecks": bottlenecks,
+        "total_workers": total_workers,
+        "total_machines": total_machines,
+        "prod_promedio_por_trabajador_u_ph": prod_promedio_por_trabajador,
+        "prod_promedio_por_maquina_u_ph": prod_promedio_por_maquina,
+        "prod_hora_hombre_agreg_u_ph": prod_por_hora_hombre_agregada,
+        "prod_hora_maquina_agreg_u_ph": prod_por_hora_maquina_agregada,
+        "eficiencia_pct": eficiencia,
+        "segundos_humanos_por_unidad": segundos_humanos_por_unidad,
+        "horas_hombre_por_unidad": horas_hombre_por_unidad,
+        "costo_labor_directo_por_unidad": costo_labor_directo_por_unidad,
+        "costo_labor_pagado_por_unidad": costo_labor_pagado_por_unidad,
+    }
+    return metrics
+
+# -----------------------
+# UTIL: imprimir resultados claros
+# -----------------------
+def print_metrics(title, m):
+    print("\n" + "="*40)
+    print(f"{title}")
+    print("="*40)
+    print(f"Tiempo total del sistema (T0): {m['T0_s']:.2f} s")
+    print(f"Tiempo de ciclo (CT): {m['CT_s']:.2f} s/unidad")
+    print(f"Throughput (TH): {m['TH_u_per_h']:.2f} unidades/h")
+    print("Estación(es) cuello de botella:", ", ".join(f"{b['tarea']} (WS {b['id']})" for b in m['bottlenecks']))
+    print()
+    print(f"Total trabajadores (hombre): {m['total_workers']}")
+    print(f"Total máquinas: {m['total_machines']}")
+    print()
+    print("=== Productividades (RESPUESTA PRINCIPAL: PROMEDIO) ===")
+    print(f"- Promedio por trabajador (TH / total_workers): {m['prod_promedio_por_trabajador_u_ph']:.2f} unid/hr-trabajador")
+    print(f"- Promedio por máquina (TH / total_machines): {m['prod_promedio_por_maquina_u_ph']:.2f} unid/hr-máquina")
+    print()
+    print("=== Productividades adicionales ===")
+    print(f"- Por hora-hombre agregada (3600 / segs_humanos_por_unidad): {m['prod_hora_hombre_agreg_u_ph']:.2f} unid/hr-hora_hombre")
+    print(f"- Por hora-máquina agregada: {m['prod_hora_maquina_agreg_u_ph']:.2f} unid/hr-hora_maquina")
+    print()
+    print(f"Eficiencia del sistema: {m['eficiencia_pct']:.2f}%")
+    print()
+    print("=== Costos de mano de obra ===")
+    print(f"- Horas-hombre por unidad (empleadas): {m['horas_hombre_por_unidad']:.4f} hr")
+    print(f"- Costo laboral DIRECTO por unidad (w={5000}): {m['costo_labor_directo_por_unidad']:.2f}")
+    print(f"- Costo laboral PAGADO por unidad (sueldos totales / TH): {m['costo_labor_pagado_por_unidad']:.2f}")
+    print("="*40)
+
+# -----------------------
+# EJECUCIÓN: comparar Alternativa I vs Alternativa II
+# -----------------------
+# preparar alternativas
+alt1 = [s.copy() for s in stations_base]  # todos n_operadores=1 (ya están)
+alt2 = [s.copy() for s in stations_base]
+for s in alt2:
+    s["n_operadores"] = operarios_alt2.get(s["id"], s.get("n_operadores",1))
+
+# calcular métricas
+m1 = compute_metrics(alt1, wage_per_hour=5000)
+m2 = compute_metrics(alt2, wage_per_hour=5000)
+
+# imprimir
+print_metrics("ALTERNATIVA I (base)", m1)
+print_metrics("ALTERNATIVA II (2,3,5 con 2 operarios)", m2)
+
+# decidir "mejor" según throughput y eficiencia
+mejor_por_TH = "I" if m1["TH_u_per_h"] > m2["TH_u_per_h"] else "II" if m2["TH_u_per_h"] > m1["TH_u_per_h"] else "empate"
+mejor_por_ef = "I" if m1["eficiencia_pct"] > m2["eficiencia_pct"] else "II" if m2["eficiencia_pct"] > m1["eficiencia_pct"] else "empate"
+print(f"\nComparación: mejor por TH = Alternativa {mejor_por_TH}; mejor por eficiencia = Alternativa {mejor_por_ef}")
+
+# -----------------------
+# (Opcional) Diagrama OT (Gantt) para la alternativa 2
+# -----------------------
+def plot_gantt(stations, title="Diagrama de Gantt"):
+    tareas = [s["tarea"] for s in stations]
+    tiempos = [s["tiempo"] / s["n_operadores"] for s in stations]  # tiempo ajustado efectivo
+    inicios = []
+    acum = 0
+    for t in tiempos:
+        inicios.append(acum)
+        acum += t
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    colors = {"hombre": "skyblue", "maquina": "orange"}
+    for i, s in enumerate(stations):
+        ax.barh(i, tiempos[i], left=inicios[i], height=0.5, color=colors[s["operador"]])
+        label = f"{tiempos[i]:.1f}s"
+        if s["operador"] == "hombre" and s["n_operadores"] > 1:
+            label += f" (orig {s['tiempo']}s / {s['n_operadores']} pers)"
+        ax.text(inicios[i] + tiempos[i]/2, i, label, va="center", ha="center", fontsize=8)
+
+    ax.set_yticks(range(len(tareas)))
+    ax.set_yticklabels(tareas)
+    ax.set_xlabel("Tiempo (s)")
+    ax.set_title(title)
+    plt.tight_layout()
+    plt.show()
+
+# Descomenta la siguiente línea si quieres ver el Gantt de la alternativa 2:
+# plot_gantt(alt2, "Diagrama OT - Alternativa 2")

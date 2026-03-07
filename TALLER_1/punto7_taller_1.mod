@@ -1,0 +1,114 @@
+reset;
+
+model;
+
+# ======================================================================
+# Conjuntos (Sets)
+# ======================================================================
+
+set PRODUCTOS;  # Conjunto de productos (A, B, C, ...)
+set MESES;      # Conjunto de meses (Mes1, Mes2, Mes3)
+set MAQUINAS;   # Conjunto de máquinas (M1, M2, ...)
+
+# ======================================================================
+# Parámetros (Parameters)
+# ======================================================================
+
+param utilidad{PRODUCTOS};            # Utilidad por unidad de cada producto
+param demanda_min{PRODUCTOS};         # Demanda mínima que se debe satisfacer por producto
+param tiempo{PRODUCTOS, MAQUINAS};    # Tiempo de producción por unidad de producto en cada máquina (en horas)
+param capacidad_dias{MESES};          # Capacidad en días hábiles para cada mes
+
+# ======================================================================
+# Variables de decisión (Decision Variables)
+# ======================================================================
+
+# Variable X[p,m]: cantidad de producto 'p' a producir en el mes 'm'
+var X{PRODUCTOS, MESES} >= 0 integer;
+
+# ======================================================================
+# Función Objetivo (Objective Function)
+# ======================================================================
+
+# Maximizar la utilidad total, que es la suma de la utilidad de todos los productos
+# producidos en todos los meses.
+maximize UtilidadTotal:
+    sum{p in PRODUCTOS, m in MESES} utilidad[p] * X[p,m];
+
+# ======================================================================
+# Restricciones (Constraints)
+# ======================================================================
+
+# Restricción 1: Cumplir la demanda mínima de cada producto.
+# La suma de la producción de un producto 'p' a lo largo de todos los meses
+# debe ser mayor o igual a su demanda mínima.
+s.t. DemandaMinima{p in PRODUCTOS}:
+    sum{m in MESES} X[p,m] >= demanda_min[p];
+
+# Restricción 2: No exceder la capacidad de CADA MÁQUINA en CADA MES.
+# La suma del tiempo que todos los productos consumen en una máquina 'k' en un mes 'm'
+# no debe exceder la capacidad de esa máquina en ese mes.
+s.t. CapacidadPorMaquina{m in MESES, k in MAQUINAS}:
+    sum{p in PRODUCTOS} tiempo[p,k] * X[p,m] <= capacidad_dias[m];
+    
+s.t. DemandaMinimaMensual{p in PRODUCTOS, m in MESES}:
+    X[p,m] >= demanda_min[p];
+
+data;
+
+# ======================================================================
+# Datos (Data)
+# ======================================================================
+
+set PRODUCTOS := A B C D E F G H I J;
+set MESES := Mes1 Mes2 Mes3;
+set MAQUINAS := M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16;
+
+param utilidad :=
+A 1200
+B 1420
+C 980
+D 1250
+E 1600
+F 1150
+G 880
+H 1000
+I 1320
+J 1280 ;
+
+param demanda_min :=
+A 100
+B 100
+C 250
+D 80
+E 150
+F 120
+G 120
+H 160
+I 100
+J 150 ;
+
+param tiempo:
+        M1  M2  M3  M4  M5  M6  M7  M8  M9 M10 M11 M12 M13 M14 M15 M16 :=
+A       1   0   4   0   6   5   6   4   8   4   8   2   4   2   2   2
+B       0   5   0   7   8   4   4   0   0   0   0   0   0   5   2   4
+C       2   0   4   0   0   6   5   3   4   6   4   2   0   2   2   5
+D       2   0   5   4   0   4   4   8  12   8   5   3   0   4   2   4
+E       0   8   0   8  10   0   0   0   0   0   4   2   2   5   4   4
+F       3   0   4   0   0   6   5   4  10   6   4   0   8   4   3   2
+G       4   0   5  10   6   6   8   5   6   8   0   2   0   4   2   2
+H       2   0   3   0   0   5   5   0   4   6   5   0   0   4   4   2
+I       0   6   0   5   8   0   0   0   8   8   5   5   8   2   2   4
+J       0   4   0   2   7   8   6   6   9   4   5   2   8   2   2   4 ;
+
+# Valores correctos de capacidad en días hábiles
+param capacidad_dias :=
+Mes1 9600
+Mes2 10560
+Mes3 9120 ;
+
+# --- Opciones de Solver y comandos finales ---
+option solver cplex; # Usar el solucionador CPLEX
+solve;               # Ejecutar la optimización
+display UtilidadTotal; # Mostrar el valor óptimo de la utilidad
+display X;           # Mostrar las cantidades a producir de cada producto en cada mes

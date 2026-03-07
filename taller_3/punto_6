@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+# punto_6_final.py
+# Versión final: heurística profesor (replicada) + solver correcto + resumen limpio + excel
+
+from ortools.sat.python import cp_model
+from math import ceil
+import pandas as pd
+
+# -----------------------
+# Datos
+# -----------------------
+tasks = {
+    1: {"pred": [],       "t": 2},
+    2: {"pred": [1],      "t": 6},
+    3: {"pred": [2],      "t": 6},
+    4: {"pred": [2],      "t": 2},
+    5: {"pred": [2],      "t": 2},
+    6: {"pred": [2],      "t": 12},
+    7: {"pred": [3,4],    "t": 7},
+    8: {"pred": [7],      "t": 5},
+    9: {"pred": [5],      "t": 1},
+    10:{"pred": [6,9],    "t": 4},
+    11:{"pred": [8,10],   "t": 6},
+    12:{"pred": [11],     "t": 7},
+}
+task_ids = sorted(tasks.keys())
+SUM_C = sum(tasks[i]["t"] for i in task_ids)
+SUM_D = 5
+AVAILABLE_TIME = 27000
+
+# -----------------------
+# Orden topológico fijo (según tu taller)
+# Esto asegura la misma prioridad que usa el profesor en el módulo.
+# -----------------------
+TOPO = [1, 2, 3, 4, 5, 6, 7, 9, 8, 10, 11, 12]
+
+# -----------------------
+# Utilidades
+# -----------------------
+def format_assign(assign):
+    if not assign:
+        return "{}"
+    return "{" + ", ".join(f"{i}:{assign[i]}" for i in sorted(assign)) + "}"
+
+def capacity_and_eff(C, N):
+    cap = AVAILABLE_TIME / C
+    eff = SUM_C / (C * N)
+    return round(cap,2), round(eff,4)
+
+# -----------------------
+# Heurística del profesor (replicada)
+# Reglas:
+#  - Orden de selección: tareas disponibles por orden en TOPO.
+#  - En cada estación, insertar la primera tarea disponible (según TOPO) que quepa.
+#  - Avanzar a la siguiente estación cuando no queden disponibles que quepan.
+#  - Para UALBP-1 con C dado: usar N = ceil((SUM_C + SUM_D) / C) estaciones y devolver cargas para 1..N (incluir ceros).
+#  - Para UALBP-2 con N dado: buscar el menor C entero para el que la heurística logra asignar todas las tareas en N estaciones.
+# -----------------------
+def profesor_fill_given_C(C, N):
+    assigned = set()
+    assignment = {}
+    loads = {s:0 for s in range(1, N+1)}
+    station = 1
+    while len(assigned) < len(task_ids) and station <= N:
+        progressed = False
+        while True:
+            # tareas disponibles (predecesoras ya asignadas)
+            avail = [i for i in TOPO if i not in assigned and all(p in assigned for p in tasks[i]["pred"])]
+            if not avail:
+                break
+            # elegir la primera disponible según TOPO que quepa en la estación actual
+            pick = None
+            for i in avail:
+                if loads[station] + tasks[i]["t"] <= C:
+                    pick = i
+                    break
+            if pick is None:
+                break
+            # asignar
+            assignment[pick] = station
+            loads[station] += tasks[pick]["t"]
+            assigned.add(pick)
+            progressed = True
+        station += 1
+    feasible = (len(assigned) == len(task_ids))
+    # asegurarnos de devolver cargas para todas las estaciones 1..N (incluyendo 0)
+    return feasible, assignment if feasible else None, loads
+
+def profesor_mode(cycles=[30,20,15], Ns=[3,4,7]):
+    results = []
+    # UALBP-1 (ciclo dado) -> usar N = ceil((SUM_C+SUM_D)/C)
+    for C in cycles:
+        N = ceil((SUM_C + SUM_D) / C)
+        feas, assign, loads = profesor_fill_given_C(C, N)
+        cap, eff = capacity_and_eff(C, N)
+        # incluir cargas con estaciones hasta N (incluir 0)
+        results.append({
+            "method":"Profesor",
+            "variant":f"UALBP-1 Cycle={C}",
+            "C":C, "N":N, "feasible":feas,
+            "assignment": (assign if assign else {}),
+            "loads": loads,
+            "capacity":cap, "efficiency":eff
+        })
+    # UALBP-2 (N dado) -> buscar C mínimo entero que la heurística pueda asignar
+    for N in Ns:
+        lower = max(max(tasks[i]["t"] for i in task_ids), int(ceil(SUM_C/N)))
+        upper = SUM_C + SUM_D
+        found = False
+        for C in range(lower, upper+1):
+            feas, assign, loads = profesor_fill_given_C(C, N)
+            if feas:
+                cap, eff = capacity_and_eff(C, N)
+                results.append({
+                    "method":"Profesor",
+                    "variant":f"UALBP-2 N={N}",
+                    "C":C, "N":N, "feasible":True,
+                    "assignment": assign,
+                    "loads": loads,
+                    "capacity":cap, "efficiency":eff
+                })
+                found = True
+                break
+        if not found:
+            results.append({
+                "method":"Profesor",
+                "variant":f"UALBP-2 N={N}",
+                "feasible":False
+            })
+    # Rabbit-Chase (usamos ciclo real Crc = (SUM_C+SUM_D)/N y asignación greedy según TOPO)
+    for N in Ns:
+        Crc = (SUM_C + SUM_D)/N
+        Cint = int(Crc) if Crc==int(Crc) else int(ceil(Crc))
+        feas, assign, loads = profesor_fill_given_C(Cint, N)
+        cap, eff = capacity_and_eff(Crc, N)
+        results.append({
+            "method":"Rabbit",
+            "variant":f"Rabbit N={N}",
+            "C":round(Crc,4),
+            "N":N,
+            "feasible":feas,
+            "assignment": (assign if assign else {}),
+            "loads": loads,
+            "capacity":cap, "efficiency":eff
+        })
+    return results
+
+# -----------------------
+# SOLVER EXACTO (OR-TOOLS CP-SAT)
+# - UALBP-2: minimizar C para N dado (luego lexicográfico minimizar sum s*X para imitar profesor)
+# - UALBP-1: minimizar sum Y[s] dado C fijo; correctamente ligar X<=Y y capacidad <= C*Y
+# -----------------------
+def solve_ualbp2_lexico(N, time_limit_s=30):
+    model = cp_model.CpModel()
+    S = N
+    C_ub = SUM_C + SUM_D
+    X = {}
+    for i in task_ids:
+        for s in range(1, S+1):
+            X[(i,s)] = model.NewBoolVar(f"X_{i}_{s}")
+    Cvar = model.NewIntVar(0, C_ub, "C")
+    # each task assigned once
+    for i in task_ids:
+        model.Add(sum(X[(i,s)] for s in range(1,S+1)) == 1)
+    # capacity constraints
+    for s in range(1,S+1):
+        model.Add(sum(tasks[i]["t"] * X[(i,s)] for i in task_ids) <= Cvar)
+    # precedence constraints (station indices non-decreasing)
+    for i in task_ids:
+        for p in tasks[i]["pred"]:
+            model.Add(sum(s * X[(p,s)] for s in range(1,S+1)) <= sum(s * X[(i,s)] for s in range(1,S+1)))
+    # minimize cycle
+    model.Minimize(Cvar)
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_s
+    solver.parameters.num_search_workers = 8
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {"success":False, "status":solver.StatusName(status)}
+    Copt = int(solver.Value(Cvar))
+    # second stage: minimize sum s*X with C fixed
+    model2 = cp_model.CpModel()
+    X2 = {}
+    for i in task_ids:
+        for s in range(1, S+1):
+            X2[(i,s)] = model2.NewBoolVar(f"X2_{i}_{s}")
+    C2 = model2.NewIntVar(Copt, Copt, "C2")
+    for i in task_ids:
+        model2.Add(sum(X2[(i,s)] for s in range(1,S+1)) == 1)
+    for s in range(1,S+1):
+        model2.Add(sum(tasks[i]["t"] * X2[(i,s)] for i in task_ids) <= C2)
+    for i in task_ids:
+        for p in tasks[i]["pred"]:
+            model2.Add(sum(s * X2[(p,s)] for s in range(1,S+1)) <= sum(s * X2[(i,s)] for s in range(1,S+1)))
+    # secondary objective: push tasks to lower station numbers
+    model2.Minimize(sum(s * X2[(i,s)] for i in task_ids for s in range(1,S+1)))
+    solver2 = cp_model.CpSolver()
+    solver2.parameters.max_time_in_seconds = time_limit_s
+    solver2.parameters.num_search_workers = 8
+    status2 = solver2.Solve(model2)
+    if status2 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {"success":False, "status2":solver2.StatusName(status2), "Copt":Copt}
+    assignment = {}
+    loads = {s:0 for s in range(1,S+1)}
+    for i in task_ids:
+        for s in range(1,S+1):
+            if solver2.Value(X2[(i,s)]) == 1:
+                assignment[i] = s
+                loads[s] += tasks[i]["t"]
+                break
+    cap, eff = capacity_and_eff(Copt, N)
+    return {"success":True, "C":Copt, "assignment":assignment, "loads":loads, "capacity":cap, "efficiency":eff}
+
+def solve_ualbp1_minY(C_given, station_max=12, time_limit_s=30):
+    model = cp_model.CpModel()
+    S = station_max
+    X = {}
+    Y = {}
+    for i in task_ids:
+        for s in range(1,S+1):
+            X[(i,s)] = model.NewBoolVar(f"X_{i}_{s}")
+    for s in range(1,S+1):
+        Y[s] = model.NewBoolVar(f"Y_{s}")
+    # each task once
+    for i in task_ids:
+        model.Add(sum(X[(i,s)] for s in range(1,S+1)) == 1)
+    # capacity and X<=Y
+    for s in range(1,S+1):
+        model.Add(sum(tasks[i]["t"] * X[(i,s)] for i in task_ids) <= C_given * Y[s])
+        for i in task_ids:
+            model.Add(X[(i,s)] <= Y[s])
+    # precedences
+    for i in task_ids:
+        for p in tasks[i]["pred"]:
+            model.Add(sum(s * X[(p,s)] for s in range(1,S+1)) <= sum(s * X[(i,s)] for s in range(1,S+1)))
+    # avoid gaps in Y
+    for s in range(1,S):
+        model.Add(Y[s+1] <= Y[s])
+    # minimize number of used stations
+    model.Minimize(sum(Y[s] for s in range(1,S+1)))
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_s
+    solver.parameters.num_search_workers = 8
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {"success":False, "status":solver.StatusName(status)}
+    used = [s for s in range(1,S+1) if solver.Value(Y[s]) == 1]
+    k = len(used)
+    assignment = {}
+    loads = {s:0 for s in used}
+    for i in task_ids:
+        for s in used:
+            if solver.Value(X[(i,s)]) == 1:
+                assignment[i] = s
+                loads[s] += tasks[i]["t"]
+                break
+    cap, eff = capacity_and_eff(C_given, k)
+    return {"success":True, "C":C_given, "MinStations":k, "UsedStations":used, "assignment":assignment, "loads":loads, "capacity":cap, "efficiency":eff}
+
+# -----------------------
+# Ejecutar todo y presentar resumen legible
+# -----------------------
+def run_all_and_export(time_limit_s=30):
+    print("Ejecutando análisis UALBP…")
+    print(f"ΣC = {SUM_C} s, ΣD = {SUM_D} s, Available time = {AVAILABLE_TIME} s/day")
+    print("Topological order used (for profesor heuristic):", TOPO)
+    print("")
+
+    prof = profesor_mode()
+    # organizar salidas de profesor por variantes para búsquedas rápidas
+    prof_map = {p["variant"]:p for p in prof}
+
+    # solver UALBP-2 para N = 3,4,7
+    solver_u2 = {}
+    for N in [3,4,7]:
+        res = solve_ualbp2_lexico(N, time_limit_s=time_limit_s)
+        solver_u2[N] = res
+
+    # solver UALBP-1 para C = 30,20,15
+    solver_u1 = {}
+    for C in [30,20,15]:
+        res = solve_ualbp1_minY(C_given=C, station_max=12, time_limit_s=time_limit_s)
+        solver_u1[C] = res
+
+    # Rabbit (tomado de profesor_mode results already present)
+    rabbit_list = [p for p in prof if p["method"]=="Rabbit"]
+
+    # Imprimir resumen limpio (ordenado)
+    print("\n" + "="*70)
+    print("🔵  RESUMEN GENERAL UALBP".center(70))
+    print("="*70 + "\n")
+
+    # Punto A
+    print("🟣 PUNTO A — UALBP-1 (CICLO FIJO)")
+    for C in [30,20,15]:
+        p = prof_map.get(f"UALBP-1 Cycle={C}")
+        s = solver_u1.get(C)
+        print("\n" + "-"*60)
+        print(f" Ciclo: C = {C} s")
+        print("  -> Profesor (heurística):")
+        print(f"     • N (teórico) = {p['N']}")
+        print(f"     • Cargas por estación (1..N): {p['loads']}")
+        print(f"     • Eficiencia (ΣC/(C·N)) = {p['efficiency']}")
+        print("  -> Solver (mínimo estaciones) :")
+        if s.get("success"):
+            print(f"     • MinStations = {s.get('MinStations')}")
+            print(f"     • UsedStations = {s.get('UsedStations')}")
+            print(f"     • Loads = {s.get('loads')}")
+            print(f"     • Capacity (unidad/día) = {s.get('capacity')}, Efficiency = {s.get('efficiency')}")
+        else:
+            print("     • Solver no encontró solución en el tiempo dado o no es factible.")
+    print("\n" + "="*70)
+
+    # Punto B
+    print("🟢 PUNTO B — UALBP-2 (N FIJO, minimizar C)")
+    for N in [3,4,7]:
+        p = prof_map.get(f"UALBP-2 N={N}")
+        s = solver_u2.get(N)
+        print("\n" + "-"*60)
+        print(f" N = {N} estaciones")
+        print("  -> Profesor (heurística):")
+        print(f"     • C (heur) = {p.get('C')}")
+        print(f"     • Loads = {p.get('loads')}")
+        print("  -> Solver (óptimo):")
+        if s.get("success"):
+            print(f"     • C_opt = {s.get('C')}")
+            print(f"     • Loads = {s.get('loads')}")
+            print(f"     • Capacity = {s.get('capacity')}, Efficiency = {s.get('efficiency')}")
+        else:
+            print("     • Solver: no encontró solución/timeout.")
+    print("\n" + "="*70)
+
+    # Punto C
+    print("🟠 PUNTO C — Rabbit-Chase (heurística)")
+    for r in rabbit_list:
+        print("\n" + "-"*60)
+        print(f" {r['variant']}:")
+        print(f"  • Crc = {r.get('C')}")
+        print(f"  • Loads = {r.get('loads')}")
+    print("\n" + "="*70)
+
+    # Exportar Excel con profesor / solver / comparacion
+    prof_rows = []
+    for p in prof:
+        prof_rows.append({
+            "Method":p["method"],
+            "Variant":p["variant"],
+            "N":p.get("N"),
+            "C":p.get("C"),
+            "Feasible":p.get("feasible"),
+            "Loads": str(p.get("loads")),
+            "Capacity":p.get("capacity"),
+            "Efficiency":p.get("efficiency")
+        })
+    df_prof = pd.DataFrame(prof_rows)
+
+    solver_u2_rows = []
+    for N,res in solver_u2.items():
+        solver_u2_rows.append({
+            "N": N,
+            "C_opt": res.get("C"),
+            "Loads": str(res.get("loads")),
+            "Capacity": res.get("capacity"),
+            "Efficiency": res.get("efficiency"),
+            "Success": res.get("success")
+        })
+    df_solver_u2 = pd.DataFrame(solver_u2_rows)
+
+    solver_u1_rows = []
+    for C,res in solver_u1.items():
+        solver_u1_rows.append({
+            "C": C,
+            "MinStations": res.get("MinStations"),
+            "UsedStations": str(res.get("UsedStations")),
+            "Loads": str(res.get("loads")),
+            "Capacity": res.get("capacity"),
+            "Efficiency": res.get("efficiency"),
+            "Success": res.get("success")
+        })
+    df_solver_u1 = pd.DataFrame(solver_u1_rows)
+
+    df_rabbit = pd.DataFrame([{
+        "Variant": r["variant"], "C": r["C"], "Loads": str(r["loads"]), "Capacity": r["capacity"], "Efficiency": r["efficiency"]
+    } for r in rabbit_list])
+
+    df_comp = pd.DataFrame({
+        "Variant": ["UALBP-2 N=3","UALBP-2 N=4","UALBP-2 N=7","UALBP-1 C=30","UALBP-1 C=20","UALBP-1 C=15"]
+    })
+
+    # Añadir más columnas comparativas (rellenar desde mapas)
+    # ... (opcional mejorar)
+
+    writer = pd.ExcelWriter("UALBP_comparison.xlsx", engine="openpyxl")
+    df_prof.to_excel(writer, sheet_name="Profesor", index=False)
+    df_solver_u2.to_excel(writer, sheet_name="Solver_UALBP2", index=False)
+    df_solver_u1.to_excel(writer, sheet_name="Solver_UALBP1", index=False)
+    df_rabbit.to_excel(writer, sheet_name="Rabbit", index=False)
+    writer.close()
+
+    print("Excel exportado: UALBP_comparison.xlsx")
+    print("Análisis completo finalizado.")
+
+# -----------------------
+# Entry point
+# -----------------------
+if __name__ == "__main__":
+    # puedes ajustar el time_limit_s si quieres más tiempo al solver
+    run_all_and_export(time_limit_s=30)

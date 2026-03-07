@@ -1,0 +1,64 @@
+import matplotlib.pyplot as plt
+
+# Datos de las estaciones
+workstations = [
+    {"id": 1, "tarea": "box assembly", "operador": "hombre", "tiempo": 35},
+    {"id": 2, "tarea": "insert engine in the box", "operador": "hombre", "tiempo": 60},
+    {"id": 3, "tarea": "insert electronic card", "operador": "hombre", "tiempo": 50},
+    {"id": 4, "tarea": "welding", "operador": "maquina", "tiempo": 20},
+    {"id": 5, "tarea": "place lids", "operador": "hombre", "tiempo": 70},
+    {"id": 6, "tarea": "performance test", "operador": "maquina", "tiempo": 30},
+    {"id": 7, "tarea": "packing", "operador": "hombre", "tiempo": 25}
+]
+
+# --- Cálculos ---
+tiempos = [ws["tiempo"] for ws in workstations]
+T0 = sum(tiempos)                        # Tiempo total del sistema
+CT = max(tiempos)                        # Tiempo de ciclo del sistema
+TH = 3600 / CT                           # Throughput [unidades/hora]
+cuello = workstations[tiempos.index(CT)] # Estación cuello de botella
+
+# Contar operarios y máquinas
+n_h = sum(1 for ws in workstations if ws["operador"] == "hombre")
+n_m = sum(1 for ws in workstations if ws["operador"] == "maquina")
+
+# Productividades
+P_h = TH / n_h
+P_m = TH / n_m
+
+# Eficiencia
+N = len(workstations)
+Ef = T0 / (N * CT)
+
+# --- Mostrar resultados ---
+print("📊 RESULTADOS DEL SISTEMA")
+print(f"Tiempo total del sistema (T0): {T0} segundos")
+print(f"Tiempo de ciclo (CT): {CT} segundos/unidad")
+print(f"Throughput (TH): {TH:.2f} unidades/hora")
+print(f"Estación cuello de botella: {cuello['tarea']} (Workstation {cuello['id']})")
+print(f"Productividad horas-hombre: {P_h:.2f} unidades/hr-hombre")
+print(f"Productividad horas-máquina: {P_m:.2f} unidades/hr-máquina")
+print(f"Eficiencia del sistema: {Ef*100:.2f}%")
+
+# --- Diagrama de Gantt ---
+tareas = [ws["tarea"] for ws in workstations]
+inicios = []
+acumulado = 0
+for t in tiempos:
+    inicios.append(acumulado)
+    acumulado += t
+
+fig, ax = plt.subplots(figsize=(10, 5))
+colors = {"hombre": "skyblue", "maquina": "orange"}
+
+for i, ws in enumerate(workstations):
+    ax.barh(y=i, width=ws["tiempo"], left=inicios[i], height=0.5,
+            color=colors[ws["operador"]])
+    ax.text(inicios[i] + ws["tiempo"]/2, i, f"{ws['tiempo']}s", 
+            va="center", ha="center", color="black")
+
+ax.set_yticks(range(len(tareas)))
+ax.set_yticklabels(tareas)
+ax.set_xlabel("Tiempo (s)")
+ax.set_title("Diagrama de Gantt - Línea de Producción")
+plt.show()

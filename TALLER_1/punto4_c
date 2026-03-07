@@ -1,0 +1,105 @@
+# punto4_alternativa.py
+import matplotlib.pyplot as plt
+
+def calcular_alternativa(workstations, wage=5000):
+    # --- Ajustar tiempos según # de operarios ---
+    tiempos_ajustados = [ws["tiempo"] / ws["operadores"] for ws in workstations]
+
+    # --- Calcular métricas principales ---
+    total_time = sum(tiempos_ajustados)             # tiempo total ajustado (T0)
+    ciclo = max(tiempos_ajustados)                  # cuello de botella = CT
+    throughput = 3600 / ciclo                       # unidades por hora
+
+    # Identificar cuello(s) de botella
+    cuello_b = [ws for ws, t in zip(workstations, tiempos_ajustados) if t == ciclo]
+
+    # Contar recursos
+    total_workers = sum(ws["operadores"] for ws in workstations if ws["tipo"] == "hombre")
+    total_machines = sum(ws["operadores"] for ws in workstations if ws["tipo"] == "maquina")
+
+    # --- Productividades (promedio) ---
+    prod_trabajador = throughput / total_workers if total_workers > 0 else 0
+    prod_maquina = throughput / total_machines if total_machines > 0 else 0
+
+    # --- Eficiencia ---
+    N = len(workstations)
+    eficiencia = total_time / (N * ciclo) * 100
+
+    # --- Costos laborales ---
+    segs_humanos = sum(ws["tiempo"] for ws in workstations if ws["tipo"] == "hombre")
+    horas_hombre_unidad = segs_humanos / 3600
+    costo_directo = horas_hombre_unidad * wage
+    costo_pagado = (total_workers * wage) / throughput if throughput > 0 else 0
+
+    # --- Mostrar resultados ---
+    print("========================================")
+    print("ALTERNATIVA (configuración actual)")
+    print("========================================")
+    print(f"Tiempo total del sistema (T0): {total_time:.2f} s")
+    print(f"Tiempo de ciclo (CT): {ciclo:.2f} s/unidad")
+    print(f"Throughput (TH): {throughput:.2f} unidades/h")
+    print("Estación(es) cuello de botella:",
+          ", ".join(f"{b['tarea']} (WS {b['id']})" for b in cuello_b))
+    print()
+    print(f"Total trabajadores (hombre): {total_workers}")
+    print(f"Total máquinas: {total_machines}")
+    print()
+    print("=== Productividades (PROMEDIO) ===")
+    print(f"- Por trabajador: {prod_trabajador:.2f} unid/hr-trabajador")
+    print(f"- Por máquina: {prod_maquina:.2f} unid/hr-máquina")
+    print()
+    print(f"Eficiencia del sistema: {eficiencia:.2f}%")
+    print()
+    print("=== Costos de mano de obra ===")
+    print(f"- Horas-hombre por unidad (empleadas): {horas_hombre_unidad:.4f} hr")
+    print(f"- Costo laboral DIRECTO por unidad (w={wage}): {costo_directo:.2f}")
+    print(f"- Costo laboral PAGADO por unidad: {costo_pagado:.2f}")
+    print("========================================")
+
+    # --- Graficar diagrama Gantt ---
+    plot_gantt(workstations)
+
+
+def plot_gantt(workstations):
+    """Genera un diagrama de Gantt usando tiempos ajustados"""
+    tareas = [ws["tarea"] for ws in workstations]
+    tiempos = [ws["tiempo"] / ws["operadores"] for ws in workstations]
+    
+    inicios = []
+    acumulado = 0
+    for t in tiempos:
+        inicios.append(acumulado)
+        acumulado += t
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    colores = {"hombre": "skyblue", "maquina": "orange"}
+
+    for i, ws in enumerate(workstations):
+        ax.barh(i, tiempos[i], left=inicios[i], height=0.5,
+                color=colores[ws["tipo"]])
+        ax.text(inicios[i] + tiempos[i]/2, i,
+                f"{tiempos[i]:.1f}s",
+                va="center", ha="center", fontsize=8)
+
+    ax.set_yticks(range(len(tareas)))
+    ax.set_yticklabels(tareas)
+    ax.set_xlabel("Tiempo (s)")
+    ax.set_title("Diagrama de Gantt - Línea de Producción")
+    plt.tight_layout()
+    plt.show()
+
+
+# ------------------------------
+# EJEMPLO: Alternativa II (2 hombres en WS 2,3,5)
+# ------------------------------
+workstations = [
+    {"id": 1, "tarea": "box assembly",           "tipo": "hombre",  "tiempo": 35, "operadores": 2},
+    {"id": 2, "tarea": "insert engine in the box","tipo": "hombre",  "tiempo": 60, "operadores": 2},
+    {"id": 3, "tarea": "insert electronic card", "tipo": "hombre",  "tiempo": 50, "operadores": 2},
+    {"id": 4, "tarea": "welding",                "tipo": "maquina", "tiempo": 20, "operadores": 1},
+    {"id": 5, "tarea": "place lids",             "tipo": "hombre",  "tiempo": 70, "operadores": 2},
+    {"id": 6, "tarea": "performance test",       "tipo": "maquina", "tiempo": 30, "operadores": 1},
+    {"id": 7, "tarea": "packing",                "tipo": "hombre",  "tiempo": 25, "operadores": 2},
+]
+
+calcular_alternativa(workstations)

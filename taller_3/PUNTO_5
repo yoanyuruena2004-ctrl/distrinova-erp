@@ -1,0 +1,298 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =============================================================================
+# DATOS DE ENTRADA
+# =============================================================================
+
+# Demanda mensual de cada modelo
+demandas = {
+    'K6': 4000,
+    'UK': 3000,
+    'KZ': 2000,
+    'K_Premium': 1000
+}
+
+# Tiempo disponible de producción
+dias_laborales = 24
+horas_por_dia = 8
+tiempo_disponible_segundos = dias_laborales * horas_por_dia * 3600
+
+# Tareas y tiempos para cada modelo
+tareas_models = {
+    'K6': {
+        'A': {'tiempo': 48, 'predecesores': []},
+        'B': {'tiempo': 30, 'predecesores': []},
+        'C': {'tiempo': 28, 'predecesores': ['A', 'B']},
+        'D': {'tiempo': 32, 'predecesores': ['C']},
+        'E': {'tiempo': 26, 'predecesores': ['D']},
+        'F': {'tiempo': 42, 'predecesores': ['D']},
+        'G': {'tiempo': 36, 'predecesores': ['E']},
+        'I': {'tiempo': 58, 'predecesores': ['F', 'G']}
+    },
+    'UK': {
+        'A': {'tiempo': 48, 'predecesores': []},
+        'B': {'tiempo': 22, 'predecesores': []},
+        'C': {'tiempo': 18, 'predecesores': ['A', 'B']},
+        'D': {'tiempo': 38, 'predecesores': ['C']},
+        'E': {'tiempo': 36, 'predecesores': ['D']},
+        'F': {'tiempo': 42, 'predecesores': ['E']},
+        'G': {'tiempo': 40, 'predecesores': ['E']},
+        'H': {'tiempo': 44, 'predecesores': ['F']},
+        'I': {'tiempo': 62, 'predecesores': ['G', 'H']}
+    },
+    'KZ': {
+        'A': {'tiempo': 58, 'predecesores': []},
+        'B': {'tiempo': 32, 'predecesores': []},
+        'C': {'tiempo': 24, 'predecesores': ['A', 'B']},
+        'D': {'tiempo': 38, 'predecesores': ['C']},
+        'E': {'tiempo': 44, 'predecesores': ['D']},
+        'F': {'tiempo': 28, 'predecesores': ['E']},
+        'G': {'tiempo': 34, 'predecesores': ['E']},
+        'H': {'tiempo': 40, 'predecesores': ['F']},
+        'I': {'tiempo': 48, 'predecesores': ['H']},
+        'J': {'tiempo': 54, 'predecesores': ['G', 'I']}
+    },
+    'K_Premium': {
+        'A': {'tiempo': 62, 'predecesores': []},
+        'B': {'tiempo': 38, 'predecesores': []},
+        'C': {'tiempo': 28, 'predecesores': ['A', 'B']},
+        'D': {'tiempo': 32, 'predecesores': ['C']},
+        'E': {'tiempo': 24, 'predecesores': ['D']},
+        'F': {'tiempo': 20, 'predecesores': ['D']},
+        'G': {'tiempo': 30, 'predecesores': ['E']},
+        'H': {'tiempo': 34, 'predecesores': ['F']},
+        'I': {'tiempo': 48, 'predecesores': ['H']},
+        'J': {'tiempo': 52, 'predecesores': ['G']},
+        'K': {'tiempo': 50, 'predecesores': ['J']},
+        'L': {'tiempo': 32, 'predecesores': ['K']}
+    }
+}
+
+# =============================================================================
+# a) DIAGRAMA DE RED DE OPERACIONES COMBINADO
+# =============================================================================
+
+def construir_red_combinada(tareas_models):
+    """Construye la red de precedencias combinada para todos los modelos"""
+    red_combinada = {}
+    
+    # Recopilar todas las tareas de todos los modelos
+    todas_tareas = set()
+    for modelo in tareas_models.values():
+        todas_tareas.update(modelo.keys())
+    
+    # Construir relaciones de precedencia combinadas
+    for tarea in todas_tareas:
+        predecesores = set()
+        sucesores = set()
+        
+        for modelo, tareas in tareas_models.items():
+            if tarea in tareas:
+                # Agregar predecesores
+                predecesores.update(tareas[tarea]['predecesores'])
+                
+                # Buscar sucesores
+                for otra_tarea, datos in tareas.items():
+                    if tarea in datos['predecesores']:
+                        sucesores.add(otra_tarea)
+        
+        red_combinada[tarea] = {
+            'predecesores': sorted(list(predecesores)),
+            'sucesores': sorted(list(sucesores))
+        }
+    
+    return red_combinada
+
+# =============================================================================
+# b) COEFICIENTES DE DEMANDA
+# =============================================================================
+
+def calcular_coeficientes_demanda(demandas):
+    """Calcula los coeficientes dj para cada modelo"""
+    demanda_total = sum(demandas.values())
+    coeficientes = {}
+    
+    for modelo, demanda in demandas.items():
+        coeficientes[modelo] = demanda / demanda_total
+    
+    return coeficientes, demanda_total
+
+# =============================================================================
+# c) TIEMPOS COMPUESTOS
+# =============================================================================
+
+def calcular_tiempos_compuestos(tareas_models, coeficientes):
+    """Calcula los tiempos compuestos para cada tarea"""
+    # Obtener todas las tareas únicas
+    todas_tareas = set()
+    for modelo in tareas_models.values():
+        todas_tareas.update(modelo.keys())
+    
+    tiempos_compuestos = {}
+    
+    for tarea in sorted(todas_tareas):
+        tiempo_compuesto = 0
+        for modelo, coef in coeficientes.items():
+            if tarea in tareas_models[modelo]:
+                tiempo_compuesto += tareas_models[modelo][tarea]['tiempo'] * coef
+        tiempos_compuestos[tarea] = tiempo_compuesto
+    
+    return tiempos_compuestos
+
+# =============================================================================
+# d) ANÁLISIS CON 4 ESTACIONES
+# =============================================================================
+
+def analizar_4_estaciones(tiempos_compuestos, tiempo_disponible, demanda_total):
+    """Analiza la viabilidad con 4 estaciones de trabajo"""
+    tiempo_total_compuesto = sum(tiempos_compuestos.values())
+    
+    # Takt Time requerido
+    takt_time_requerido = tiempo_disponible / demanda_total
+    
+    # Tiempo de ciclo mínimo teórico con 4 estaciones
+    ciclo_minimo_4 = tiempo_total_compuesto / 4
+    
+    # Producción máxima con 4 estaciones
+    produccion_max_4 = tiempo_disponible / ciclo_minimo_4
+    
+    # ¿Se puede cubrir la demanda?
+    puede_cubrir = produccion_max_4 >= demanda_total
+    
+    return {
+        'takt_time_requerido': takt_time_requerido,
+        'ciclo_minimo_4': ciclo_minimo_4,
+        'produccion_max_4': produccion_max_4,
+        'puede_cubrir': puede_cubrir,
+        'tiempo_total_compuesto': tiempo_total_compuesto
+    }
+
+# =============================================================================
+# e) CONDICIÓN DE BALANCEO ÓPTIMO
+# =============================================================================
+
+def encontrar_balanceo_optimo(tiempos_compuestos, tiempo_disponible, demanda_total):
+    """Encuentra la condición de balanceo que cumple con la demanda"""
+    tiempo_total_compuesto = sum(tiempos_compuestos.values())
+    takt_time_requerido = tiempo_disponible / demanda_total
+    
+    # Encontrar número mínimo de estaciones
+    n_min_teorico = tiempo_total_compuesto / takt_time_requerido
+    n_min = int(np.ceil(n_min_teorico))
+    
+    # Calcular eficiencia para diferentes números de estaciones
+    resultados = []
+    
+    for n in range(n_min, n_min + 5):  # Probamos desde n_min hasta n_min+4
+        ciclo_teorico = tiempo_total_compuesto / n
+        ciclo_efectivo = max(ciclo_teorico, max(tiempos_compuestos.values()))
+        
+        eficiencia = tiempo_total_compuesto / (ciclo_efectivo * n)
+        produccion = tiempo_disponible / ciclo_efectivo
+        
+        resultados.append({
+            'estaciones': n,
+            'ciclo_teorico': ciclo_teorico,
+            'ciclo_efectivo': ciclo_efectivo,
+            'eficiencia': eficiencia,
+            'produccion': produccion,
+            'cumple_demanda': produccion >= demanda_total
+        })
+    
+    return resultados, n_min
+
+# =============================================================================
+# EJECUCIÓN PRINCIPAL
+# =============================================================================
+
+def main():
+    print("=" * 70)
+    print("BALANCEO DE LÍNEA DE ENSAMBLE MIXTO - TELÉFONOS MÓVILES")
+    print("=" * 70)
+    
+    # a) Red de operaciones combinada
+    print("\na) DIAGRAMA DE RED DE OPERACIONES COMBINADO:")
+    red_combinada = construir_red_combinada(tareas_models)
+    print("Red de precedencias combinada:")
+    for tarea, datos in red_combinada.items():
+        print(f"  {tarea}: Predecesores: {datos['predecesores']}, Sucesores: {datos['sucesores']}")
+    
+    # b) Coeficientes de demanda
+    print("\nb) COEFICIENTES DE DEMANDA:")
+    coeficientes, demanda_total = calcular_coeficientes_demanda(demandas)
+    for modelo, coef in coeficientes.items():
+        print(f"  {modelo}: {coef:.3f} ({coef*100:.1f}%)")
+    print(f"  Demanda total: {demanda_total:,} unidades")
+    
+    # c) Tiempos compuestos
+    print("\nc) TIEMPOS COMPUESTOS:")
+    tiempos_compuestos = calcular_tiempos_compuestos(tareas_models, coeficientes)
+    tiempo_total_compuesto = sum(tiempos_compuestos.values())
+    
+    for tarea, tiempo in tiempos_compuestos.items():
+        print(f"  {tarea}: {tiempo:.1f} segundos")
+    print(f"  TIEMPO TOTAL COMPUESTO: {tiempo_total_compuesto:.1f} segundos")
+    
+    # d) Análisis con 4 estaciones
+    print("\nd) ANÁLISIS CON 4 ESTACIONES:")
+    resultado_4 = analizar_4_estaciones(tiempos_compuestos, tiempo_disponible_segundos, demanda_total)
+    
+    print(f"  Takt Time requerido: {resultado_4['takt_time_requerido']:.2f} s/unidad")
+    print(f"  Tiempo de ciclo mínimo con 4 estaciones: {resultado_4['ciclo_minimo_4']:.2f} s/unidad")
+    print(f"  Producción máxima con 4 estaciones: {resultado_4['produccion_max_4']:,.0f} unidades")
+    print(f"  ¿Puede cubrir la demanda total? {'SÍ' if resultado_4['puede_cubrir'] else 'NO'}")
+    
+    # e) Condición de balanceo óptimo
+    print("\ne) CONDICIÓN DE BALANCEO ÓPTIMO:")
+    resultados_balanceo, n_min = encontrar_balanceo_optimo(tiempos_compuestos, tiempo_disponible_segundos, demanda_total)
+    
+    print(f"  Número mínimo teórico de estaciones: {n_min:.1f}")
+    print("\n  Análisis de diferentes configuraciones:")
+    print("  Estaciones | Ciclo (s) | Eficiencia | Producción | Cumple Demanda")
+    print("  " + "-" * 60)
+    
+    for res in resultados_balanceo:
+        cumple = "✓" if res['cumple_demanda'] else "✗"
+        print(f"  {res['estaciones']:^10} | {res['ciclo_efectivo']:8.2f} | {res['eficiencia']:10.1%} | {res['produccion']:9.0f} | {cumple:^14}")
+    
+    # Recomendación óptima
+    config_optima = next((r for r in resultados_balanceo if r['cumple_demanda']), None)
+    if config_optima:
+        print(f"\n  RECOMENDACIÓN: Usar {config_optima['estaciones']} estaciones")
+        print(f"  - Tiempo de ciclo: {config_optima['ciclo_efectivo']:.2f} s/unidad")
+        print(f"  - Eficiencia: {config_optima['eficiencia']:.1%}")
+        print(f"  - Producción: {config_optima['produccion']:,.0f} unidades/mes")
+    
+    # Resumen de capacidades
+    print("\n" + "=" * 70)
+    print("RESUMEN DE CAPACIDADES")
+    print("=" * 70)
+    print(f"Tiempo disponible: {tiempo_disponible_segundos:,} segundos/mes")
+    print(f"Demanda total: {demanda_total:,} unidades/mes")
+    print(f"Takt Time requerido: {resultado_4['takt_time_requerido']:.2f} s/unidad")
+    print(f"Tiempo total compuesto: {tiempo_total_compuesto:.1f} segundos")
+    
+    # Gráfico de tiempos compuestos
+    plt.figure(figsize=(12, 6))
+    tareas = list(tiempos_compuestos.keys())
+    tiempos = list(tiempos_compuestos.values())
+    
+    plt.bar(tareas, tiempos, color='skyblue', edgecolor='navy')
+    plt.axhline(y=resultado_4['takt_time_requerido'], color='red', linestyle='--', 
+                label=f'Takt Time requerido ({resultado_4["takt_time_requerido"]:.1f} s)')
+    plt.axhline(y=resultado_4['ciclo_minimo_4'], color='orange', linestyle='--', 
+                label=f'Ciclo mínimo 4 estaciones ({resultado_4["ciclo_minimo_4"]:.1f} s)')
+    
+    plt.xlabel('Tareas')
+    plt.ylabel('Tiempo (segundos)')
+    plt.title('Tiempos Compuestos de Tareas vs Takt Time')
+    plt.legend()
+    plt.xticks(rotation=45)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()

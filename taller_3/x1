@@ -1,0 +1,522 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import networkx as nx
+
+class AssemblyLineBalancer:
+    def __init__(self):
+        # Datos iniciales
+        self.demandas = {
+            'K6': 4000,
+            'UK': 3000,
+            'KZ': 2000,
+            'K_Premium': 1000
+        }
+        
+        self.tareas_models = {
+            'K6': {
+                'A': {'tiempo': 48, 'predecesores': []},
+                'B': {'tiempo': 30, 'predecesores': []},
+                'C': {'tiempo': 28, 'predecesores': ['A', 'B']},
+                'D': {'tiempo': 32, 'predecesores': ['C']},
+                'E': {'tiempo': 26, 'predecesores': ['D']},
+                'F': {'tiempo': 42, 'predecesores': ['D']},
+                'G': {'tiempo': 36, 'predecesores': ['E']},
+                'I': {'tiempo': 58, 'predecesores': ['F', 'G']}
+            },
+            'UK': {
+                'A': {'tiempo': 48, 'predecesores': []},
+                'B': {'tiempo': 22, 'predecesores': []},
+                'C': {'tiempo': 18, 'predecesores': ['A', 'B']},
+                'D': {'tiempo': 38, 'predecesores': ['C']},
+                'E': {'tiempo': 36, 'predecesores': ['D']},
+                'F': {'tiempo': 42, 'predecesores': ['E']},
+                'G': {'tiempo': 40, 'predecesores': ['E']},
+                'H': {'tiempo': 44, 'predecesores': ['F']},
+                'I': {'tiempo': 62, 'predecesores': ['G', 'H']}
+            },
+            'KZ': {
+                'A': {'tiempo': 58, 'predecesores': []},
+                'B': {'tiempo': 32, 'predecesores': []},
+                'C': {'tiempo': 24, 'predecesores': ['A', 'B']},
+                'D': {'tiempo': 38, 'predecesores': ['C']},
+                'E': {'tiempo': 44, 'predecesores': ['D']},
+                'F': {'tiempo': 28, 'predecesores': ['E']},
+                'G': {'tiempo': 34, 'predecesores': ['E']},
+                'H': {'tiempo': 40, 'predecesores': ['F']},
+                'I': {'tiempo': 48, 'predecesores': ['H']},
+                'J': {'tiempo': 54, 'predecesores': ['G', 'I']}
+            },
+            'K_Premium': {
+                'A': {'tiempo': 62, 'predecesores': []},
+                'B': {'tiempo': 38, 'predecesores': []},
+                'C': {'tiempo': 28, 'predecesores': ['A', 'B']},
+                'D': {'tiempo': 32, 'predecesores': ['C']},
+                'E': {'tiempo': 24, 'predecesores': ['D']},
+                'F': {'tiempo': 20, 'predecesores': ['D']},
+                'G': {'tiempo': 30, 'predecesores': ['E']},
+                'H': {'tiempo': 34, 'predecesores': ['F']},
+                'I': {'tiempo': 48, 'predecesores': ['H']},
+                'J': {'tiempo': 52, 'predecesores': ['G']},
+                'K': {'tiempo': 50, 'predecesores': ['J']},
+                'L': {'tiempo': 32, 'predecesores': ['K']}
+            }
+        }
+        
+        self.dias_laborales = 24
+        self.horas_por_dia = 8
+        self.tiempo_disponible_segundos = self.dias_laborales * self.horas_por_dia * 3600
+        
+    def calcular_coeficientes_demanda(self, demandas):
+        demanda_total = sum(demandas.values())
+        coeficientes = {modelo: demanda/demanda_total for modelo, demanda in demandas.items()}
+        return coeficientes, demanda_total
+    
+    def calcular_tiempos_compuestos(self, tareas_models, coeficientes):
+        todas_tareas = set()
+        for modelo in tareas_models.values():
+            todas_tareas.update(modelo.keys())
+        
+        tiempos_compuestos = {}
+        for tarea in sorted(todas_tareas):
+            tiempo_compuesto = 0
+            for modelo, coef in coeficientes.items():
+                if tarea in tareas_models[modelo]:
+                    tiempo_compuesto += tareas_models[modelo][tarea]['tiempo'] * coef
+            tiempos_compuestos[tarea] = round(tiempo_compuesto, 1)
+        
+        return tiempos_compuestos
+    
+    def construir_red_combinada(self, tareas_models):
+        red_combinada = {}
+        todas_tareas = set()
+        
+        for modelo in tareas_models.values():
+            todas_tareas.update(modelo.keys())
+        
+        for tarea in todas_tareas:
+            predecesores = set()
+            sucesores = set()
+            
+            for modelo, tareas in tareas_models.items():
+                if tarea in tareas:
+                    predecesores.update(tareas[tarea]['predecesores'])
+                    for otra_tarea, datos in tareas.items():
+                        if tarea in datos['predecesores']:
+                            sucesores.add(otra_tarea)
+            
+            red_combinada[tarea] = {
+                'predecesores': sorted(list(predecesores)),
+                'sucesores': sorted(list(sucesores))
+            }
+        
+        return red_combinada
+    
+    def calcular_pesos_posicionales(self, tiempos_compuestos, red_combinada):
+        def calcular_peso(tarea):
+            peso = tiempos_compuestos[tarea]
+            visitadas = set()
+            por_visitar = red_combinada[tarea]['sucesores'].copy()
+            
+            while por_visitar:
+                t = por_visitar.pop(0)
+                if t not in visitadas:
+                    peso += tiempos_compuestos[t]
+                    visitadas.add(t)
+                    por_visitar.extend(red_combinada[t]['sucesores'])
+            return peso
+        
+        pesos = {}
+        for tarea in tiempos_compuestos:
+            pesos[tarea] = calcular_peso(tarea)
+        
+        return pesos
+    
+    def balanceo_rpw(self, tiempos_compuestos, red_combinada, num_estaciones, ciclo_objetivo):
+        # Calcular pesos posicionales
+        pesos = self.calcular_pesos_posicionales(tiempos_compuestos, red_combinada)
+        
+        # Ordenar tareas por peso posicional descendente
+        tareas_ordenadas = sorted(tiempos_compuestos.keys(), key=lambda x: pesos[x], reverse=True)
+        
+        # Inicializar estaciones
+        estaciones = [[] for _ in range(num_estaciones)]
+        tiempos_estacion = [0] * num_estaciones
+        tareas_asignadas = set()
+        
+        # Función para verificar si todas las predecesoras están asignadas
+        def predecesoras_asignadas(tarea):
+            return all(pred in tareas_asignadas for pred in red_combinada[tarea]['predecesores'])
+        
+        # Asignar tareas
+        for tarea in tareas_ordenadas:
+            if tarea in tareas_asignadas:
+                continue
+                
+            if not predecesoras_asignadas(tarea):
+                continue
+                
+            # Buscar estación con espacio disponible
+            asignada = False
+            for i in range(num_estaciones):
+                if tiempos_estacion[i] + tiempos_compuestos[tarea] <= ciclo_objetivo:
+                    estaciones[i].append(tarea)
+                    tiempos_estacion[i] += tiempos_compuestos[tarea]
+                    tareas_asignadas.add(tarea)
+                    asignada = True
+                    break
+            
+            if not asignada:
+                # Si no cabe en ninguna estación, asignar a la que tenga menos carga
+                idx_min = np.argmin(tiempos_estacion)
+                estaciones[idx_min].append(tarea)
+                tiempos_estacion[idx_min] += tiempos_compuestos[tarea]
+                tareas_asignadas.add(tarea)
+        
+        return estaciones, tiempos_estacion
+    
+    def encontrar_balanceo_optimo(self, tiempos_compuestos, red_combinada, takt_time, tiempo_disponible, demanda_total):
+        tiempo_total = sum(tiempos_compuestos.values())
+        tarea_mas_larga = max(tiempos_compuestos.values())
+        
+        # Número mínimo teórico de estaciones
+        n_min_teorico = tiempo_total / takt_time
+        n_min_real = max(int(np.ceil(n_min_teorico)), int(np.ceil(tiempo_total / tarea_mas_larga)))
+        
+        resultados = []
+        
+        # Probar diferentes números de estaciones
+        for n in range(n_min_real, n_min_real + 5):
+            ciclo_objetivo = takt_time
+            estaciones, tiempos_estacion = self.balanceo_rpw(tiempos_compuestos, red_combinada, n, ciclo_objetivo)
+            
+            ciclo_real = max(tiempos_estacion) if tiempos_estacion else 0
+            eficiencia = tiempo_total / (ciclo_real * n) if ciclo_real > 0 else 0
+            produccion = tiempo_disponible / ciclo_real if ciclo_real > 0 else 0
+            
+            resultados.append({
+                'estaciones': n,
+                'ciclo_real': ciclo_real,
+                'eficiencia': eficiencia,
+                'produccion': produccion,
+                'cumple_demanda': produccion >= demanda_total,
+                'asignacion': estaciones,
+                'tiempos_estacion': tiempos_estacion
+            })
+            
+            if produccion >= demanda_total:
+                break
+        
+        return resultados
+
+class InterfazBalanceoMejorada:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Balanceo de Línea de Ensamble Mixto - Versión Mejorada")
+        self.root.geometry("1400x900")
+        
+        self.balancer = AssemblyLineBalancer()
+        self.demanda_total_global = 0  # Variable global para almacenar la demanda total
+        
+        # Crear notebook (pestañas)
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Crear pestañas
+        self.tab_entrada = ttk.Frame(self.notebook)
+        self.tab_resultados = ttk.Frame(self.notebook)
+        self.tab_graficas = ttk.Frame(self.notebook)
+        
+        self.notebook.add(self.tab_entrada, text="Datos de Entrada")
+        self.notebook.add(self.tab_resultados, text="Resultados")
+        self.notebook.add(self.tab_graficas, text="Gráficas")
+        
+        self.crear_interfaz_entrada()
+        self.crear_interfaz_resultados()
+        self.crear_interfaz_graficas()
+        
+    def crear_interfaz_entrada(self):
+        # Frame principal de entrada
+        main_frame = ttk.Frame(self.tab_entrada, padding="15")
+        main_frame.pack(fill='both', expand=True)
+        
+        # Título
+        titulo = ttk.Label(main_frame, text="Sistema de Balanceo de Línea de Ensamble Mixto", 
+                          font=("Arial", 16, "bold"))
+        titulo.pack(pady=10)
+        
+        # Frame de demanda
+        frame_demanda = ttk.LabelFrame(main_frame, text="Demanda Mensual", padding="10")
+        frame_demanda.pack(fill='x', padx=10, pady=5)
+        
+        # Crear tabla de demanda
+        self.crear_tabla_demanda(frame_demanda)
+        
+        # Frame de parámetros de tiempo
+        frame_tiempo = ttk.LabelFrame(main_frame, text="Parámetros de Tiempo", padding="10")
+        frame_tiempo.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(frame_tiempo, text="Días laborales por mes:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.dias_var = tk.StringVar(value=str(self.balancer.dias_laborales))
+        ttk.Entry(frame_tiempo, textvariable=self.dias_var, width=10).grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Label(frame_tiempo, text="Horas por día:").grid(row=0, column=2, sticky='w', padx=5, pady=5)
+        self.horas_var = tk.StringVar(value=str(self.balancer.horas_por_dia))
+        ttk.Entry(frame_tiempo, textvariable=self.horas_var, width=10).grid(row=0, column=3, padx=5, pady=5)
+        
+        # Botón de cálculo
+        ttk.Button(main_frame, text="Calcular Balanceo Óptimo", 
+                  command=self.calcular_balanceo).pack(pady=20)
+    
+    def crear_tabla_demanda(self, parent):
+        # Crear Treeview para demanda
+        columns = ('Modelo', 'Demanda', 'Porcentaje')
+        self.tree_demanda = ttk.Treeview(parent, columns=columns, show='headings', height=5)
+        
+        # Definir columnas
+        self.tree_demanda.heading('Modelo', text='Modelo')
+        self.tree_demanda.heading('Demanda', text='Demanda (unidades)')
+        self.tree_demanda.heading('Porcentaje', text='Porcentaje (%)')
+        
+        self.tree_demanda.column('Modelo', width=100)
+        self.tree_demanda.column('Demanda', width=120)
+        self.tree_demanda.column('Porcentaje', width=100)
+        
+        # Insertar datos iniciales
+        self.demanda_total_global = sum(self.balancer.demandas.values())
+        for modelo, demanda in self.balancer.demandas.items():
+            porcentaje = (demanda / self.demanda_total_global) * 100
+            self.tree_demanda.insert('', 'end', values=(modelo, demanda, f"{porcentaje:.1f}%"))
+        
+        self.tree_demanda.pack(pady=10)
+        
+        # Frame para editar demanda
+        frame_editar = ttk.Frame(parent)
+        frame_editar.pack(pady=5)
+        
+        ttk.Label(frame_editar, text="Editar demanda:").pack(side='left', padx=5)
+        
+        self.combo_modelo = ttk.Combobox(frame_editar, values=list(self.balancer.demandas.keys()), state="readonly")
+        self.combo_modelo.set(list(self.balancer.demandas.keys())[0])
+        self.combo_modelo.pack(side='left', padx=5)
+        
+        self.entry_demanda = ttk.Entry(frame_editar, width=10)
+        self.entry_demanda.pack(side='left', padx=5)
+        
+        ttk.Button(frame_editar, text="Actualizar", command=self.actualizar_demanda).pack(side='left', padx=5)
+    
+    def actualizar_demanda(self):
+        modelo = self.combo_modelo.get()
+        try:
+            nueva_demanda = int(self.entry_demanda.get())
+            self.balancer.demandas[modelo] = nueva_demanda
+            
+            # Actualizar treeview
+            for item in self.tree_demanda.get_children():
+                self.tree_demanda.delete(item)
+            
+            self.demanda_total_global = sum(self.balancer.demandas.values())
+            for modelo, demanda in self.balancer.demandas.items():
+                porcentaje = (demanda / self.demanda_total_global) * 100
+                self.tree_demanda.insert('', 'end', values=(modelo, demanda, f"{porcentaje:.1f}%"))
+                
+            messagebox.showinfo("Éxito", f"Demanda de {modelo} actualizada a {nueva_demanda}")
+            
+        except ValueError:
+            messagebox.showerror("Error", "Por favor ingrese un número válido para la demanda")
+    
+    def crear_interfaz_resultados(self):
+        # Frame principal de resultados
+        main_frame = ttk.Frame(self.tab_resultados, padding="15")
+        main_frame.pack(fill='both', expand=True)
+        
+        # Área de texto para resultados con scroll
+        self.texto_resultados = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, width=100, height=30)
+        self.texto_resultados.pack(fill='both', expand=True, padx=10, pady=10)
+        self.texto_resultados.config(state=tk.DISABLED)
+    
+    def crear_interfaz_graficas(self):
+        # Frame principal de gráficas
+        main_frame = ttk.Frame(self.tab_graficas)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Frame para contener las gráficas
+        self.frame_graficas = ttk.Frame(main_frame)
+        self.frame_graficas.pack(fill='both', expand=True, padx=10, pady=10)
+    
+    def calcular_balanceo(self):
+        try:
+            # Actualizar datos de tiempo
+            self.balancer.dias_laborales = int(self.dias_var.get())
+            self.balancer.horas_por_dia = int(self.horas_var.get())
+            self.balancer.tiempo_disponible_segundos = self.balancer.dias_laborales * self.balancer.horas_por_dia * 3600
+            
+            # Calcular coeficientes
+            coeficientes, self.demanda_total_global = self.balancer.calcular_coeficientes_demanda(self.balancer.demandas)
+            
+            # Calcular tiempos compuestos
+            tiempos_compuestos = self.balancer.calcular_tiempos_compuestos(self.balancer.tareas_models, coeficientes)
+            
+            # Calcular takt time
+            takt_time = self.balancer.tiempo_disponible_segundos / self.demanda_total_global
+            
+            # Construir red combinada
+            red_combinada = self.balancer.construir_red_combinada(self.balancer.tareas_models)
+            
+            # Encontrar balanceo óptimo
+            resultados = self.balancer.encontrar_balanceo_optimo(
+                tiempos_compuestos, red_combinada, takt_time,
+                self.balancer.tiempo_disponible_segundos, self.demanda_total_global
+            )
+            
+            # Mostrar resultados
+            self.mostrar_resultados(resultados[0] if resultados else None, tiempos_compuestos, takt_time, self.demanda_total_global)
+            
+            # Generar gráficas
+            self.mostrar_graficas(tiempos_compuestos, takt_time, resultados[0] if resultados else None, self.demanda_total_global)
+            
+            # Cambiar a pestaña de resultados
+            self.notebook.select(self.tab_resultados)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error en el cálculo: {str(e)}")
+    
+    def mostrar_resultados(self, resultado, tiempos_compuestos, takt_time, demanda_total):
+        # Habilitar texto para edición
+        self.texto_resultados.config(state=tk.NORMAL)
+        self.texto_resultados.delete(1.0, tk.END)
+        
+        if not resultado:
+            self.texto_resultados.insert(tk.END, "No se encontró solución factible\n")
+            self.texto_resultados.config(state=tk.DISABLED)
+            return
+        
+        # Encabezado
+        self.texto_resultados.insert(tk.END, "="*80 + "\n")
+        self.texto_resultados.insert(tk.END, "BALANCEO DE LÍNEA DE ENSAMBLE MIXTO - RESULTADOS\n")
+        self.texto_resultados.insert(tk.END, "="*80 + "\n\n")
+        
+        # Información general
+        self.texto_resultados.insert(tk.END, "INFORMACIÓN GENERAL:\n")
+        self.texto_resultados.insert(tk.END, "-"*40 + "\n")
+        self.texto_resultados.insert(tk.END, f"Tiempo disponible: {self.balancer.tiempo_disponible_segundos:,} segundos/mes\n")
+        self.texto_resultados.insert(tk.END, f"Demanda total: {demanda_total:,} unidades/mes\n")
+        self.texto_resultados.insert(tk.END, f"Takt Time requerido: {takt_time:.2f} s/unidad\n")
+        self.texto_resultados.insert(tk.END, f"Tiempo total compuesto: {sum(tiempos_compuestos.values()):.1f} segundos\n")
+        self.texto_resultados.insert(tk.END, f"Tarea más larga: {max(tiempos_compuestos.values()):.1f} segundos\n\n")
+        
+        # Tiempos compuestos por tarea
+        self.texto_resultados.insert(tk.END, "TIEMPOS COMPUESTOS POR TAREA:\n")
+        self.texto_resultados.insert(tk.END, "-"*40 + "\n")
+        for tarea, tiempo in tiempos_compuestos.items():
+            self.texto_resultados.insert(tk.END, f"Tarea {tarea}: {tiempo:.1f} segundos\n")
+        self.texto_resultados.insert(tk.END, "\n")
+        
+        # Resultados del balanceo
+        self.texto_resultados.insert(tk.END, "BALANCEO ÓPTIMO:\n")
+        self.texto_resultados.insert(tk.END, "-"*40 + "\n")
+        self.texto_resultados.insert(tk.END, f"Estaciones requeridas: {resultado['estaciones']}\n")
+        self.texto_resultados.insert(tk.END, f"Tiempo de ciclo: {resultado['ciclo_real']:.2f} s/unidad\n")
+        self.texto_resultados.insert(tk.END, f"Eficiencia: {resultado['eficiencia']:.1%}\n")
+        self.texto_resultados.insert(tk.END, f"Producción: {resultado['produccion']:,.0f} unidades/mes\n")
+        self.texto_resultados.insert(tk.END, f"¿Cumple demanda? {'SÍ' if resultado['cumple_demanda'] else 'NO'}\n\n")
+        
+        # Asignación de tareas
+        self.texto_resultados.insert(tk.END, "ASIGNACIÓN DE TAREAS POR ESTACIÓN:\n")
+        self.texto_resultados.insert(tk.END, "-"*40 + "\n")
+        for i, (estacion, tiempo) in enumerate(zip(resultado['asignacion'], resultado['tiempos_estacion'])):
+            self.texto_resultados.insert(tk.END, f"Estación {i+1}: {estacion} → {tiempo:.1f} s\n")
+        
+        # Deshabilitar texto para solo lectura
+        self.texto_resultados.config(state=tk.DISABLED)
+    
+    def mostrar_graficas(self, tiempos_compuestos, takt_time, resultado, demanda_total):
+        # Limpiar frame de gráficas
+        for widget in self.frame_graficas.winfo_children():
+            widget.destroy()
+        
+        if not resultado:
+            return
+        
+        # Crear figura con subgráficas
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Gráfica 1: Tiempos compuestos vs Takt Time
+        tareas = list(tiempos_compuestos.keys())
+        tiempos = list(tiempos_compuestos.values())
+        
+        bars1 = ax1.bar(tareas, tiempos, color='lightblue', edgecolor='navy')
+        ax1.axhline(y=takt_time, color='red', linestyle='--', linewidth=2, label=f'Takt Time ({takt_time:.1f} s)')
+        ax1.set_xlabel('Tareas')
+        ax1.set_ylabel('Tiempo (segundos)')
+        ax1.set_title('Tiempos Compuestos vs Takt Time')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        ax1.tick_params(axis='x', rotation=45)
+        
+        # Añadir valores en las barras
+        for bar, tiempo in zip(bars1, tiempos):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{tiempo:.1f}', ha='center', va='bottom', fontsize=8)
+        
+        # Gráfica 2: Distribución de tiempos por estación
+        estaciones = list(range(1, resultado['estaciones'] + 1))
+        tiempos_estacion = resultado['tiempos_estacion']
+        
+        bars2 = ax2.bar(estaciones, tiempos_estacion, color='lightcoral', edgecolor='darkred')
+        ax2.axhline(y=resultado['ciclo_real'], color='red', linestyle='--', 
+                   label=f'Tiempo de Ciclo: {resultado["ciclo_real"]:.1f} s')
+        ax2.set_xlabel('Estación de Trabajo')
+        ax2.set_ylabel('Tiempo (segundos)')
+        ax2.set_title('Distribución de Tiempos por Estación')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Añadir valores en las barras
+        for bar, tiempo in zip(bars2, tiempos_estacion):
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{tiempo:.1f}', ha='center', va='bottom')
+        
+        # Gráfica 3: Eficiencia del balanceo
+        ax3.bar(resultado['estaciones'], resultado['eficiencia'] * 100, 
+               color='gold', edgecolor='orange', alpha=0.7, width=0.5)
+        ax3.set_xlabel('Número de Estaciones')
+        ax3.set_ylabel('Eficiencia (%)')
+        ax3.set_title(f'Eficiencia del Balanceo: {resultado["eficiencia"]*100:.1f}%')
+        ax3.grid(True, alpha=0.3)
+        
+        # Gráfica 4: Capacidad vs Demanda
+        categorias = ['Demanda Actual', 'Capacidad Producción']
+        valores = [demanda_total, resultado['produccion']]
+        colores = ['lightgreen' if resultado['produccion'] >= demanda_total else 'lightcoral', 'lightblue']
+        
+        bars4 = ax4.bar(categorias, valores, color=colores, edgecolor='black')
+        ax4.set_ylabel('Unidades por Mes')
+        ax4.set_title('Capacidad de Producción vs Demanda')
+        ax4.grid(True, alpha=0.3)
+        
+        # Añadir valores en las barras
+        for bar, valor in zip(bars4, valores):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + 50,
+                    f'{valor:,.0f}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        
+        # Mostrar gráfica en la interfaz
+        canvas = FigureCanvasTkAgg(fig, self.frame_graficas)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill='both', expand=True)
+
+def main():
+    root = tk.Tk()
+    app = InterfazBalanceoMejorada(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

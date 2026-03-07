@@ -1,0 +1,148 @@
+# scheduling_fixed.py
+"""
+Scheduler que reproduce la lógica de tu Excel:
+- FCFS: ordenar por R asc (si tie -> job id)
+- SPT: ordenar estático por P asc, tie -> R asc, id
+- LPT: ordenar estático por P desc, tie -> R asc, id
+- EDD: ordenar estático por D asc, tie -> R asc, id
+- STR: ordenar estático por (D - P) asc (menor slack primero), tie -> R asc, id
+
+Luego construir la secuencia aplicada: para cada job en el orden:
+S_j = max(t_actual, R_j)
+C_j = S_j + P_j
+F_j = C_j - R_j
+W_j = F_j - P_j
+T_j = max(0, C_j - D_j)
+U_j = 1 if T_j > 0 else 0
+"""
+
+import pandas as pd
+import math
+import os
+
+# --------------------------
+# Datos (usa exactamente los tuyos)
+# --------------------------
+jobs = [
+    {"Job": 1,  "R": 8,  "P": 6, "D": 22},
+    {"Job": 2,  "R": 0,  "P": 1, "D": 3},
+    {"Job": 3,  "R": 4,  "P": 3, "D": 10},
+    {"Job": 4,  "R": 8,  "P": 7, "D": 20},
+    {"Job": 5,  "R": 3,  "P": 6, "D": 16},
+    {"Job": 6,  "R": 0,  "P": 2, "D": 5},
+    {"Job": 7,  "R": 12, "P": 8, "D": 30},
+    {"Job": 8,  "R": 2,  "P": 4, "D": 8},
+    {"Job": 9,  "R": 5,  "P": 5, "D": 18},
+    {"Job": 10, "R": 15, "P": 3, "D": 29},
+]
+
+# --------------------------
+# Funciones de ordenamiento (estático)
+# --------------------------
+def order_fcfs(jlist):
+    # FCFS: por release asc (como en Excel)
+    return sorted(jlist, key=lambda x: (x["R"], x["Job"]))
+
+def order_spt(jlist):
+    # SPT estático: P asc, tie -> R asc, id
+    return sorted(jlist, key=lambda x: (x["P"], x["R"], x["Job"]))
+
+def order_lpt(jlist):
+    # LPT estático: P desc, tie -> R asc, id
+    return sorted(jlist, key=lambda x: (-x["P"], x["R"], x["Job"]))
+
+def order_edd(jlist):
+    # EDD estático: D asc, tie -> R asc, id
+    return sorted(jlist, key=lambda x: (x["D"], x["R"], x["Job"]))
+
+def order_str(jlist):
+    # STR estático: Slack = D - P ; menor slack => más urgente
+    return sorted(jlist, key=lambda x: (x["D"] - x["P"], x["R"], x["Job"]))
+
+ORDER_FUNCS = {
+    "FCFS": order_fcfs,
+    "SPT":  order_spt,
+    "LPT":  order_lpt,
+    "EDD":  order_edd,
+    "STR":  order_str,
+}
+
+# --------------------------
+# Dada una orden (lista de jobs), calcular S/C/F/W/T/U siguiendo Excel
+# --------------------------
+def build_schedule_from_order(ordered_jobs):
+    rows = []
+    t = 0.0
+    for j in ordered_jobs:
+        S = max(t, j["R"])
+        C = S + j["P"]
+        F = C - j["R"]
+        W = F - j["P"]
+        T = max(0.0, C - j["D"])
+        U = 1 if T > 0 else 0
+        rows.append({
+            "Job": j["Job"], "R": j["R"], "P": j["P"], "D": j["D"],
+            "S": S, "C": C, "F": F, "W": W, "T": T, "U": U
+        })
+        t = C
+    df = pd.DataFrame(rows)
+    # mantener el orden tal cual para la hoja Excel
+    return df
+
+# --------------------------
+# Métricas que pediste
+# --------------------------
+def metrics_from_df(df):
+    Cmax = df["C"].max()
+    SumC = df["C"].sum()
+    F_bar = df["F"].mean()
+    W_bar = df["W"].mean()
+    NT = int(df["U"].sum())
+    Tmax = int(df["T"].max()) if len(df)>0 else 0
+    SumT = df["T"].sum()
+    return {
+        "Cmax": Cmax, "SumC": SumC,
+        "F_bar": round(F_bar, 1), "W_bar": round(W_bar, 1),
+        "NT": NT, "Tmax": Tmax, "SumT": SumT
+    }
+
+# --------------------------
+# Ejecutar para todas las reglas
+# --------------------------
+rules = ["FCFS", "SPT", "LPT", "EDD", "STR"]
+schedule_dfs = {}
+metrics = {}
+
+for r in rules:
+    order = ORDER_FUNCS[r](jobs)      # obtiene la lista ordenada (estática)
+    df_sched = build_schedule_from_order(order)
+    schedule_dfs[r] = df_sched
+    metrics[r] = metrics_from_df(df_sched)
+
+# Mostrar por pantalla los ordenes y métricas
+for r in rules:
+    print(f"\n=== Regla: {r} ===")
+    df = schedule_dfs[r]
+    # Imprimir la secuencia de jobs resultante (Job order)
+    seq = df["Job"].tolist()
+    print("Secuencia (Job ids):", seq)
+    print(df.to_string(index=False))
+    print("Métricas:", metrics[r])
+
+# --------------------------
+# Guardar a Excel (una hoja por regla + resumen)
+# --------------------------
+out_xlsx = "scheduling_results.xlsx"
+try:
+    with pd.ExcelWriter(out_xlsx, engine="openpyxl", mode="w") as writer:
+        for r in rules:
+            schedule_dfs[r].to_excel(writer, sheet_name=r, index=False)
+        # DataFrame resumen
+        df_res = pd.DataFrame(metrics).T.reset_index().rename(columns={"index":"Rule"})
+        df_res = df_res[["Rule","Cmax","SumC","F_bar","W_bar","NT","Tmax","SumT"]]
+        df_res.to_excel(writer, sheet_name="Resumen", index=False)
+    print(f"\n✅ Resultados exportados a: {out_xlsx}")
+except PermissionError:
+    print(f"\n❌ No se pudo escribir '{out_xlsx}': probablemente está abierto en Excel. Ciérralo y vuelve a ejecutar.")
+except Exception as e:
+    print("\n❌ Error al guardar Excel:", e)

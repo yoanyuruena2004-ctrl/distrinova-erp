@@ -1,0 +1,90 @@
+import pandas as pd
+import numpy as np
+
+# ============================
+# Datos del problema P4||Cmax
+# ============================
+jobs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+pj = [10, 9, 6, 12, 4, 2, 3, 1, 8, 5]
+num_machines = 4  # cuatro máquinas en paralelo
+
+print("PROBLEMA: P4||Cmax - 4 MÁQUINAS EN PARALELO")
+print("ALGORITMO: LPT (Longest Processing Time)")
+print("=" * 60)
+
+# ============================
+# Ordenar trabajos por LPT (descendente)
+# ============================
+job_data = list(zip(jobs, pj))
+job_data_sorted = sorted(job_data, key=lambda x: x[1], reverse=True)  # LPT
+
+print("\nTRABAJOS ORDENADOS POR LPT:")
+print(f"{'Job':>4} | {'Pj':>3}")
+print("-" * 15)
+for job, process in job_data_sorted:
+    print(f"{job:4} | {process:3}")
+
+# ============================
+# Asignación tipo List Scheduling
+# ============================
+machines = [[] for _ in range(num_machines)]
+machine_times = [0] * num_machines
+completion_times = {}
+schedule_log = []
+
+print(f"\nASIGNACIÓN LPT A {num_machines} MÁQUINAS:")
+print(f"{'Iteración':>10} | {'Job':>4} | {'Pj':>3} | {'Máquina':>8} | {'Inicio':>6} | {'Fin':>6}")
+
+iteration = 1
+for job, process_time in job_data_sorted:
+    # Asignar a la máquina que termine más pronto
+    min_time = min(machine_times)
+    machine_index = machine_times.index(min_time)
+
+    start_time = machine_times[machine_index]
+    completion_time = start_time + process_time
+
+    machines[machine_index].append(job)
+    machine_times[machine_index] = completion_time
+    completion_times[job] = completion_time
+
+    schedule_log.append({
+        'iteration': iteration,
+        'job': job,
+        'pj': process_time,
+        'machine': f'M{machine_index + 1}',
+        'start': start_time,
+        'completion': completion_time
+    })
+
+    print(f"{iteration:10} | {job:4} | {process_time:3} | M{machine_index + 1:7} | {start_time:6} | {completion_time:6}")
+    iteration += 1
+
+# ============================
+# Calcular métricas
+# ============================
+Cmax = max(machine_times)
+SumCj = sum(completion_times.values())
+
+print(f"\n" + "=" * 60)
+print("RESULTADOS FINALES")
+print("=" * 60)
+
+print(f"\nASIGNACIÓN POR MÁQUINA:")
+for i in range(num_machines):
+    machine_jobs = machines[i]
+    machine_sequence = " → ".join(f"J{j}" for j in machine_jobs)
+    print(f"M{i+1}: {machine_sequence} | Tiempo total = {machine_times[i]}")
+
+print(f"\nCmax (Makespan) = {Cmax}")
+print(f"ΣCj (Suma de tiempos de finalización) = {SumCj}")
+print(f"Tiempo total de procesamiento = {sum(pj)}")
+print(f"Cmax teórico mínimo = {sum(pj)/num_machines:.2f}")
+
+print("\n" + "=" * 60)
+print("EXPLICACIÓN:")
+print("=" * 60)
+print("1. Se ordenan los trabajos por Pj descendente (LPT).")
+print("2. Cada trabajo se asigna a la máquina más libre en ese momento.")
+print("3. LPT tiende a balancear las cargas y minimizar Cmax.")
+print("4. El valor de Cmax es el tiempo máximo entre todas las máquinas.")
