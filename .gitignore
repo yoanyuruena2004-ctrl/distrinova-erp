@@ -1,0 +1,6 @@
+
+# Claves y secretos: nunca se suben
+.env
+*.env
+.streamlit/secrets.toml
+secrets.toml
